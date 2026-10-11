@@ -94,7 +94,7 @@ export async function POST(request: Request) {
           continue;
         }
         const shouldRelease = terminalUnpaid || stalePendingOrder;
-        const expectedAction = shouldCommit ? "commit" : shouldRelease ? "release" : null;
+        const expectedAction: "commit" | "release" | null = shouldCommit ? "commit" : shouldRelease ? "release" : null;
         if (!expectedAction || reservation.status === "committed" && shouldCommit || reservation.status === "released" && shouldRelease || reservation.status !== "active") {
           if (expectedAction && ((shouldCommit && reservation.status === "released") || (shouldRelease && reservation.status === "committed"))) {
             issues.push({

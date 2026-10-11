@@ -137,7 +137,7 @@ export class SheetsPaymentEventRepository {
     const { headers, rows } = await this.getRows();
     const event = rows.find((row) => row.values.provider_event_key === eventKey);
     if (!event) throw new Error("Payment event audit row was not found.");
-    const values = {
+    const values: Record<string, string> = {
       ...event.values,
       processing_status: status,
       processed_at: status === "processed" ? new Date().toISOString() : "",

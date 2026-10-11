@@ -1,0 +1,575 @@
+@import "tailwindcss";
+
+/* =========================================================
+   UNIVERSAL MART
+   COMMERCE CORE — GLOBAL DESIGN SYSTEM
+========================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* =======================================================
+     BRAND
+  ======================================================= */
+
+  --color-primary: 22 122 78;
+  --color-primary-hover: 16 102 64;
+  --color-primary-active: 12 82 52;
+
+  --color-primary-soft: 229 246 237;
+  --color-primary-muted: 198 232 214;
+  --color-primary-subtle: 242 250 246;
+
+  --color-secondary: 14 74 54;
+  --color-secondary-hover: 10 61 44;
+  --color-secondary-active: 8 49 36;
+
+  --color-secondary-soft: 225 239 232;
+  --color-secondary-muted: 193 219 205;
+
+  --color-accent: 201 157 58;
+  --color-accent-hover: 174 132 40;
+  --color-accent-active: 145 108 31;
+
+  --color-accent-soft: 250 244 225;
+  --color-accent-muted: 240 226 183;
+  --color-accent-subtle: 253 250 241;
+
+
+  /* =======================================================
+     SEMANTIC STATUS
+  ======================================================= */
+
+  --color-success: 22 163 74;
+  --color-success-soft: 220 252 231;
+
+  --color-warning: 217 119 6;
+  --color-warning-soft: 254 243 199;
+
+  --color-danger: 220 38 38;
+  --color-danger-soft: 254 226 226;
+
+  --color-info: 37 99 235;
+  --color-info-soft: 219 234 254;
+
+
+  /* =======================================================
+     COMMERCE
+  ======================================================= */
+
+  --color-sale: 185 28 28;
+  --color-sale-soft: 254 226 226;
+
+  --color-stock-ready: 22 163 74;
+  --color-stock-low: 217 119 6;
+  --color-stock-out: 220 38 38;
+
+  --color-rating: 201 157 58;
+
+  --color-verified: 22 122 78;
+
+
+  /* =======================================================
+     SURFACE
+  ======================================================= */
+
+  --color-background: 250 250 248;
+
+  --color-surface: 255 255 255;
+  --color-surface-secondary: 246 247 245;
+  --color-surface-tertiary: 239 241 238;
+
+  --color-card: 255 255 255;
+  --color-card-hover: 252 253 251;
+
+  --color-elevated: 255 255 255;
+
+  --color-soft: 242 244 241;
+
+
+  /* =======================================================
+     TEXT
+  ======================================================= */
+
+  --color-text: 20 29 25;
+
+  --color-text-muted: 91 105 98;
+  --color-text-subtle: 132 145 138;
+
+  --color-text-invert: 255 255 255;
+
+
+  /* =======================================================
+     BORDER
+  ======================================================= */
+
+  --color-border: 224 229 225;
+  --color-border-strong: 202 211 205;
+
+
+  /* =======================================================
+     CONTAINER
+  ======================================================= */
+
+  --container-xs: 560px;
+  --container-sm: 720px;
+  --container-md: 920px;
+  --container-lg: 1120px;
+  --container-xl: 1280px;
+
+
+  /* =======================================================
+     RADIUS
+  ======================================================= */
+
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-2xl: 36px;
+  --radius-full: 999px;
+
+
+  /* =======================================================
+     SHADOW
+  ======================================================= */
+
+  --shadow-xs:
+    0 1px 2px rgb(20 29 25 / 0.04);
+
+  --shadow-sm:
+    0 4px 14px rgb(20 29 25 / 0.05);
+
+  --shadow-md:
+    0 12px 30px rgb(20 29 25 / 0.07);
+
+  --shadow-lg:
+    0 24px 60px rgb(20 29 25 / 0.10);
+
+  --shadow-floating:
+    0 28px 80px rgb(20 29 25 / 0.14);
+
+
+  /* =======================================================
+     TYPOGRAPHY
+  ======================================================= */
+
+  --font-heading:
+    "Poppins",
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+
+  --font-body:
+    "Inter",
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 15px;
+  --text-md: 17px;
+  --text-lg: 20px;
+  --text-xl: 28px;
+  --text-2xl: 40px;
+  --text-3xl: 56px;
+
+
+  /* =======================================================
+     LINE HEIGHT
+  ======================================================= */
+
+  --leading-tight: 1.08;
+  --leading-snug: 1.25;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.75;
+
+
+  /* =======================================================
+     MOTION
+  ======================================================= */
+
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+  --duration-slow: 320ms;
+
+  --ease-standard:
+    cubic-bezier(0.2, 0.8, 0.2, 1);
+
+
+  /* =======================================================
+     Z-INDEX
+  ======================================================= */
+
+  --z-header: 40;
+  --z-dropdown: 50;
+  --z-sticky: 60;
+  --z-drawer: 70;
+  --z-modal: 80;
+  --z-toast: 90;
+}
+
+
+/* =========================================================
+   DARK MODE
+========================================================= */
+
+.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-background: 12 18 15;
+
+  --color-surface: 20 28 24;
+  --color-surface-secondary: 27 36 31;
+  --color-surface-tertiary: 35 45 39;
+
+  --color-card: 20 28 24;
+  --color-card-hover: 27 36 31;
+
+  --color-elevated: 31 41 35;
+  --color-soft: 35 45 39;
+
+  --color-text: 244 247 245;
+  --color-text-muted: 170 184 176;
+  --color-text-subtle: 126 142 133;
+
+  --color-border: 45 58 50;
+  --color-border-strong: 62 77 67;
+
+  --color-primary: 56 170 111;
+  --color-primary-hover: 75 190 130;
+
+  --color-primary-soft: 20 62 42;
+
+  --color-secondary: 28 105 76;
+
+  --color-accent: 220 177 77;
+  --color-accent-hover: 232 193 101;
+
+  --color-accent-soft: 67 55 24;
+
+  --shadow-xs:
+    0 1px 2px rgb(0 0 0 / 0.20);
+
+  --shadow-sm:
+    0 4px 14px rgb(0 0 0 / 0.24);
+
+  --shadow-md:
+    0 12px 30px rgb(0 0 0 / 0.30);
+
+  --shadow-lg:
+    0 24px 60px rgb(0 0 0 / 0.38);
+
+  --shadow-floating:
+    0 28px 80px rgb(0 0 0 / 0.46);
+}
+
+
+/* =========================================================
+   TAILWIND THEME BRIDGE
+========================================================= */
+
+@theme {
+  --color-background: rgb(var(--color-background));
+
+  --color-surface: rgb(var(--color-surface));
+  --color-surface-secondary:
+    rgb(var(--color-surface-secondary));
+
+  --color-surface-tertiary:
+    rgb(var(--color-surface-tertiary));
+
+  --color-card: rgb(var(--color-card));
+  --color-card-hover: rgb(var(--color-card-hover));
+
+  --color-text: rgb(var(--color-text));
+  --color-text-muted: rgb(var(--color-text-muted));
+  --color-text-subtle: rgb(var(--color-text-subtle));
+
+  --color-border: rgb(var(--color-border));
+  --color-border-strong:
+    rgb(var(--color-border-strong));
+
+  --color-primary: rgb(var(--color-primary));
+  --color-primary-hover:
+    rgb(var(--color-primary-hover));
+
+  --color-secondary: rgb(var(--color-secondary));
+
+  --color-accent: rgb(var(--color-accent));
+
+  --color-success: rgb(var(--color-success));
+  --color-warning: rgb(var(--color-warning));
+  --color-danger: rgb(var(--color-danger));
+  --color-info: rgb(var(--color-info));
+}
+
+
+/* =========================================================
+   BASE
+========================================================= */
+
+* {
+  border-color: rgb(var(--color-border));
+}
+
+html {
+  scroll-behavior: smooth;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+
+  background:
+    rgb(var(--color-background));
+
+  color:
+    rgb(var(--color-text));
+
+  font-family:
+    var(--font-body);
+
+  font-size:
+    var(--text-base);
+
+  line-height:
+    var(--leading-normal);
+
+  overflow-x: hidden;
+}
+
+img,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background:
+    rgb(var(--color-primary) / 0.16);
+
+  color:
+    rgb(var(--color-text));
+}
+
+:focus-visible {
+  outline:
+    2px solid rgb(var(--color-accent));
+
+  outline-offset:
+    3px;
+}
+
+
+/* =========================================================
+   TYPOGRAPHY
+========================================================= */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+
+  font-family:
+    var(--font-heading);
+
+  letter-spacing:
+    -0.025em;
+}
+
+.display {
+  font-size:
+    clamp(42px, 8vw, var(--text-3xl));
+
+  font-weight:
+    700;
+
+  line-height:
+    var(--leading-tight);
+}
+
+.h1 {
+  font-size:
+    clamp(32px, 6vw, var(--text-2xl));
+
+  font-weight:
+    700;
+
+  line-height:
+    var(--leading-tight);
+}
+
+.h2 {
+  font-size:
+    clamp(25px, 5vw, var(--text-xl));
+
+  font-weight:
+    650;
+
+  line-height:
+    var(--leading-snug);
+}
+
+.body-muted {
+  color:
+    rgb(var(--color-text-muted));
+}
+
+
+/* =========================================================
+   COMMERCE CONTAINER
+========================================================= */
+
+.container-commerce,
+.container-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--container-lg);
+  margin-inline: auto;
+  padding-inline: 16px;
+}
+
+@media (min-width: 768px) {
+  .container-commerce,
+  .container-content {
+    padding-inline: 24px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .container-commerce,
+  .container-content {
+    padding-inline: 32px;
+  }
+}
+
+
+/* =========================================================
+   SURFACES
+========================================================= */
+
+.surface-card {
+  background:
+    rgb(var(--color-card));
+
+  border:
+    1px solid rgb(var(--color-border));
+
+  border-radius:
+    var(--radius-lg);
+
+  box-shadow:
+    var(--shadow-sm);
+}
+
+.surface-card-interactive {
+  transition:
+    transform var(--duration-normal) var(--ease-standard),
+    box-shadow var(--duration-normal) var(--ease-standard),
+    border-color var(--duration-normal) var(--ease-standard);
+}
+
+.surface-card-interactive:hover {
+  transform:
+    translateY(-2px);
+
+  border-color:
+    rgb(var(--color-border-strong));
+
+  box-shadow:
+    var(--shadow-md);
+}
+
+.surface-elevated {
+  background:
+    rgb(var(--color-elevated));
+
+  border:
+    1px solid rgb(var(--color-border));
+
+  border-radius:
+    var(--radius-lg);
+
+  box-shadow:
+    var(--shadow-lg);
+}
+
+
+/* =========================================================
+   PRODUCT / PRICE
+========================================================= */
+
+.product-price {
+  color:
+    rgb(var(--color-text));
+
+  font-weight:
+    700;
+
+  letter-spacing:
+    -0.02em;
+}
+
+.product-price-sale {
+  color:
+    rgb(var(--color-sale));
+}
+
+.product-price-old {
+  color:
+    rgb(var(--color-text-subtle));
+
+  text-decoration:
+    line-through;
+}
+
+.rating {
+  color:
+    rgb(var(--color-rating));
+}
+
+
+/* =========================================================
+   ACCESSIBILITY
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+
+    transition-duration:
+      0.01ms !important;
+
+    animation-duration:
+      0.01ms !important;
+
+    animation-iteration-count:
+      1 !important;
+  }
+}

@@ -58,6 +58,7 @@ export type BeginPaymentEventResult = {
   eventKey: string;
   rowNumber: number;
   alreadyProcessed: boolean;
+  inProgress: boolean;
 };
 
 /**
@@ -95,17 +96,24 @@ export class SheetsPaymentEventRepository {
 
     if (existing) {
       if (existing.values.processing_status === "processed") {
-        return { eventKey, rowNumber: existing.rowNumber, alreadyProcessed: true };
+        return { eventKey, rowNumber: existing.rowNumber, alreadyProcessed: true, inProgress: false };
+      }
+      const receivedAt = Date.parse(existing.values.received_at ?? "");
+      const processingAgeMs = Date.now() - receivedAt;
+      if (existing.values.processing_status === "processing" && Number.isFinite(receivedAt) && processingAgeMs >= 0 && processingAgeMs < 120_000) {
+        return { eventKey, rowNumber: existing.rowNumber, alreadyProcessed: false, inProgress: true };
       }
       const values: Record<string, string> = {
         ...existing.values,
         processing_status: "processing",
+        received_at: now,
+        processed_at: "",
         error_message: "",
       };
       await this.provider.updateRow(SHEET, existing.rowNumber, headers.map((header, index) =>
         Object.prototype.hasOwnProperty.call(values, header) ? values[header] : existing.raw[index] ?? "",
       ));
-      return { eventKey, rowNumber: existing.rowNumber, alreadyProcessed: false };
+      return { eventKey, rowNumber: existing.rowNumber, alreadyProcessed: false, inProgress: false };
     }
 
     const eventId = `pev_${eventKey.slice(0, 24)}`;
@@ -130,7 +138,7 @@ export class SheetsPaymentEventRepository {
     const persisted = await this.getRows();
     const row = persisted.rows.find((entry) => entry.values.provider_event_key === eventKey);
     if (!row) throw new Error("Payment event appended but could not be read back for audit.");
-    return { eventKey, rowNumber: row.rowNumber, alreadyProcessed: false };
+    return { eventKey, rowNumber: row.rowNumber, alreadyProcessed: false, inProgress: false };
   }
 
   async finish(eventKey: string, status: "processed" | "failed", errorMessage?: string): Promise<void> {

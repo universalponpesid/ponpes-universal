@@ -108,6 +108,9 @@ export async function POST(request: Request) {
     if (event.alreadyProcessed) {
       return NextResponse.json({ received: true, duplicate: true });
     }
+    if (event.inProgress) {
+      return NextResponse.json({ received: false, retry: true, message: "Event sedang diproses; kirim ulang notifikasi nanti." }, { status: 503 });
+    }
 
     const transactionStatus = notification.transaction_status;
     const isSuccessful =

@@ -32,6 +32,8 @@ type CheckoutPageProps = {
     midtransEnvironment: "sandbox" | "production";
     manualBank: PaymentInstruction;
     manualQris: PaymentInstruction;
+    manualBankEnabled: boolean;
+    manualQrisEnabled: boolean;
   };
 };
 
@@ -57,7 +59,7 @@ const inputClassName =
   "min-h-12 w-full rounded-[var(--radius-sm)] border border-[rgb(var(--color-border))] bg-[rgb(var(--color-background))] px-4 text-sm text-[rgb(var(--color-text))] outline-none transition placeholder:text-[rgb(var(--color-text-subtle))] focus:border-[rgb(var(--color-primary))] focus:ring-2 focus:ring-[rgb(var(--color-primary))]/10";
 
 export function CheckoutPage({ payment }: CheckoutPageProps) {
-  const { cart, itemCount, subtotalSnapshot, applyReconciliation } = useCart();
+  const { cart, itemCount, subtotalSnapshot, applyReconciliation, removePurchasedItems } = useCart();
 
   const [reconciling, setReconciling] = useState(true);
   const [reconciled, setReconciled] = useState(false);
@@ -78,7 +80,16 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
   const [recipientNote, setRecipientNote] = useState("");
   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(payment.midtransEnabled ? "midtrans" : "manual_bank_transfer");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
+    payment.midtransEnabled
+      ? "midtrans"
+      : payment.manualBankEnabled
+        ? "manual_bank_transfer"
+        : payment.manualQrisEnabled
+          ? "manual_qris"
+          : "manual_bank_transfer",
+  );
+  const hasAvailablePaymentMethod = payment.midtransEnabled || payment.manualBankEnabled || payment.manualQrisEnabled;
   const [shippingRates, setShippingRates] = useState<readonly ShippingRate[]>([]);
   const [shippingRateId, setShippingRateId] = useState("");
   const [shippingLoading, setShippingLoading] = useState(false);
@@ -258,6 +269,18 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
       setError("Keranjang masih kosong.");
       return;
     }
+    if (!hasAvailablePaymentMethod) {
+      setError("Belum ada metode pembayaran aktif. Hubungi admin toko sebelum melanjutkan.");
+      return;
+    }
+    if (
+      (paymentMethod === "midtrans" && !payment.midtransEnabled) ||
+      (paymentMethod === "manual_bank_transfer" && !payment.manualBankEnabled) ||
+      (paymentMethod === "manual_qris" && !payment.manualQrisEnabled)
+    ) {
+      setError("Metode pembayaran yang dipilih tidak aktif. Silakan muat ulang checkout.");
+      return;
+    }
     if (!reconciled) {
       const ready = await reconcileBeforeCheckout();
       if (!ready) return;
@@ -310,6 +333,9 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
       if (!response.ok || !payload.order) {
         throw new Error(payload.error ?? "Order belum dapat dibuat.");
       }
+      // Clear only quantities confirmed on the order, and only after the API
+      // confirms success. Items added while checkout was in flight remain in cart.
+      removePurchasedItems(payload.order.items);
       setOrder(payload.order);
     } catch (checkoutError) {
       setError(
@@ -581,14 +607,15 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
             <p className="mt-1 text-sm leading-6 text-[rgb(var(--color-text-muted))]">Pilihan ini akan disimpan bersama order agar instruksi pembayaran sesuai dengan metode yang dipilih.</p>
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               {payment.midtransEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "midtrans" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "midtrans"} onChange={() => setPaymentMethod("midtrans")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Midtrans</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Virtual account, e-wallet, kartu, dan metode tersedia di Snap</span></span></label> : null}
-              <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_bank_transfer" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_bank_transfer"} onChange={() => setPaymentMethod("manual_bank_transfer")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Transfer Bank</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Transfer lalu konfirmasi manual</span></span></label>
-              <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_qris" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_qris"} onChange={() => setPaymentMethod("manual_qris")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">QRIS</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Scan QRIS toko lalu konfirmasi</span></span></label>
+              {payment.manualBankEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_bank_transfer" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_bank_transfer"} onChange={() => setPaymentMethod("manual_bank_transfer")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Transfer Bank</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Transfer lalu konfirmasi manual</span></span></label> : null}
+              {payment.manualQrisEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_qris" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_qris"} onChange={() => setPaymentMethod("manual_qris")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">QRIS</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Scan QRIS toko lalu konfirmasi</span></span></label> : null}
+              {!hasAvailablePaymentMethod ? <p className="rounded-[var(--radius-md)] border border-[rgb(var(--color-border))] p-4 text-sm text-[rgb(var(--color-text-muted))]">Belum ada metode pembayaran aktif. Silakan hubungi admin toko.</p> : null}
             </div>
           </div>
 
           {error ? <div role="alert" className="mt-6 rounded-[var(--radius-md)] border border-[rgb(var(--color-sale))]/20 bg-[rgb(var(--color-sale))]/5 p-4 text-sm leading-5 text-[rgb(var(--color-sale))]">{error}</div> : null}
 
-          <button type="submit" disabled={submitting || shippingLoading || reconciling || !reconciled} aria-busy={submitting} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white shadow-[var(--shadow-sm)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto">
+          <button type="submit" disabled={submitting || shippingLoading || reconciling || !reconciled || !hasAvailablePaymentMethod} aria-busy={submitting} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white shadow-[var(--shadow-sm)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto">
             {submitting ? <><Loader2 size={17} className="animate-spin" />Menyimpan pesanan…</> : reconciling ? <><Loader2 size={17} className="animate-spin" />Memeriksa keranjang…</> : shippingLoading ? <><Loader2 size={17} className="animate-spin" />Menghitung ongkir…</> : reconciled ? "Buat pesanan" : "Periksa kembali keranjang"}
           </button>
           {submitting ? <p role="status" aria-live="polite" className="mt-3 flex items-center gap-2 text-sm text-[rgb(var(--color-text-muted))]"><Loader2 size={15} className="animate-spin" />Sedang memvalidasi harga, tarif pengiriman, dan menyimpan order. Jangan tutup halaman ini.</p> : null}

@@ -83,6 +83,9 @@ function parseJsonOptions(value: string | undefined): Readonly<Record<string, st
   }
   const result: Record<string, string> = {};
   for (const [key, item] of Object.entries(parsed)) {
+    if (/(^|_)(secret|token|password|api_key|private_key|server_key|access_key)(_|$)/i.test(key)) {
+      throw new Error(`options_json tidak boleh menyimpan kredensial pada key '${key}'. Simpan melalui UI admin kredensial tenant; jangan menaruh kredensial pada options_json.`);
+    }
     if (typeof item !== "string" && typeof item !== "number" && typeof item !== "boolean") {
       throw new Error(`Nilai options_json '${key}' harus berupa string, number, atau boolean.`);
     }
@@ -124,26 +127,40 @@ function mapStore(table: Table, fallback: TenantStoreSettings): TenantStoreSetti
 
 function mapPaymentProviders(table: Table): TenantPaymentProviderConfig[] {
   const allowed = new Set<ProviderId>(["midtrans", "manual_bank_transfer", "manual_qris"]);
+  const seen = new Set<ProviderId>();
   return table.rows.map((row) => {
     const record = asRecord(table, row);
     const providerId = required(record, "provider_id", "PaymentProviders") as ProviderId;
     if (!allowed.has(providerId)) throw new Error(`Payment provider '${providerId}' belum didukung platform.`);
+    if (seen.has(providerId)) throw new Error(`PaymentProviders memiliki provider_id duplikat '${providerId}'.`);
+    seen.add(providerId);
+    const secretRef = optional(record, "secret_ref");
+    const publicClientKey = optional(record, "public_client_key");
+    if (providerId !== "midtrans" && secretRef) {
+      throw new Error(`Provider '${providerId}' tidak memerlukan secret_ref pada konfigurasi pembayaran manual.`);
+    }
+    if (providerId !== "midtrans" && publicClientKey) {
+      throw new Error(`Provider '${providerId}' tidak boleh memiliki public_client_key.`);
+    }
     return {
       providerId,
       enabled: booleanValue(record.enabled),
       environment: parseEnvironment(record.environment),
-      secretRef: optional(record, "secret_ref"),
-      publicClientKey: optional(record, "public_client_key"),
+      secretRef,
+      publicClientKey,
       options: parseJsonOptions(record.options_json),
     };
   });
 }
 
 function mapShippingProviders(table: Table): TenantShippingProviderConfig[] {
+  const seen = new Set<string>();
   return table.rows.map((row) => {
     const record = asRecord(table, row);
     const providerId = required(record, "provider_id", "ShippingProviders");
     if (providerId !== "biteship") throw new Error(`Shipping provider '${providerId}' belum didukung platform.`);
+    if (seen.has(providerId)) throw new Error(`ShippingProviders memiliki provider_id duplikat '${providerId}'.`);
+    seen.add(providerId);
     const rawPostalCode = optional(record, "origin_postal_code");
     const originPostalCode = rawPostalCode ? Number(rawPostalCode) : null;
     if (originPostalCode !== null && (!Number.isInteger(originPostalCode) || originPostalCode <= 0)) {

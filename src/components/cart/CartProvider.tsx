@@ -22,6 +22,7 @@ export type CartContextValue = {
   syncItemSnapshot: (itemId: string, quantity: number, unitPrice: number) => void;
   applyReconciliation: (reconciliation: CartReconciliation) => void;
   removeItem: (itemId: string) => void;
+  removePurchasedItems: (items: readonly { productId: string; variantId?: string; quantity: number }[]) => void;
   clearCart: () => void;
 };
 
@@ -129,6 +130,41 @@ export function CartProvider({ tenantId, children }: { tenantId: string; childre
     }));
   }, []);
 
+  const removePurchasedItems = useCallback((purchasedItems: readonly { productId: string; variantId?: string; quantity: number }[]) => {
+    // Subtract the quantities recorded on the successfully created order rather
+    // than clearing the whole cart. This preserves products added while the
+    // checkout request was in flight.
+    setCart((current) => {
+      const remainingByProductVariant = new Map<string, number>();
+
+      for (const item of purchasedItems) {
+        if (!Number.isFinite(item.quantity) || item.quantity <= 0) continue;
+        const key = JSON.stringify([item.productId, item.variantId ?? null]);
+        remainingByProductVariant.set(
+          key,
+          (remainingByProductVariant.get(key) ?? 0) + Math.floor(item.quantity),
+        );
+      }
+
+      let changed = false;
+      const nextItems = current.items.flatMap((item) => {
+        const key = JSON.stringify([item.productId, item.variantId ?? null]);
+        const remainingToRemove = remainingByProductVariant.get(key) ?? 0;
+        if (remainingToRemove <= 0) return [item];
+
+        const removedQuantity = Math.min(item.quantity, remainingToRemove);
+        remainingByProductVariant.set(key, remainingToRemove - removedQuantity);
+        changed = changed || removedQuantity > 0;
+        const nextQuantity = item.quantity - removedQuantity;
+
+        return nextQuantity > 0 ? [{ ...item, quantity: nextQuantity }] : [];
+      });
+
+      if (!changed) return current;
+      return { ...current, items: nextItems, updatedAt: new Date().toISOString() };
+    });
+  }, []);
+
   const clearCart = useCallback(() => {
     setCart((current) => ({ ...current, items: [], updatedAt: new Date().toISOString() }));
   }, []);
@@ -142,8 +178,9 @@ export function CartProvider({ tenantId, children }: { tenantId: string; childre
     syncItemSnapshot,
     applyReconciliation,
     removeItem,
+    removePurchasedItems,
     clearCart,
-  }), [addItem, applyReconciliation, cart, clearCart, removeItem, syncItemSnapshot, updateQuantity]);
+  }), [addItem, applyReconciliation, cart, clearCart, removeItem, removePurchasedItems, syncItemSnapshot, updateQuantity]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

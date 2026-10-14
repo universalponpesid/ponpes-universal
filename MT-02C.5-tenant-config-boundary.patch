@@ -1,0 +1,452 @@
+diff --git a/.env.example b/.env.example
+index d5abe9c..e265e4d 100644
+--- a/.env.example
++++ b/.env.example
+@@ -10,6 +10,7 @@ COMMERCE_FEATURE_STORE_REVIEWS=false
+ GOOGLE_SHEETS_SPREADSHEET_ID=
+ GOOGLE_SERVICE_ACCOUNT_EMAIL=
+ GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
++GOOGLE_SECRET_MANAGER_PROJECT_ID=
+ 
+ # Platform tenant registry spreadsheet (marketplace mode only)
+ PLATFORM_GOOGLE_SHEETS_SPREADSHEET_ID=
+@@ -24,8 +25,9 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3001
+ NEXT_PUBLIC_STORE_EMAIL=
+ NEXT_PUBLIC_STORE_WHATSAPP=
+ 
+-# LEGACY single-store provider fallback. Keep only while tenant provider tabs are not configured.
+-# Never commit real values. Once provider rows are added, tenant secret_ref values resolve via Google Secret Manager.
++# LEGACY single-store fallback only. Marketplace mode never falls back to these provider credentials.
++# Keep only during migration; never commit real values. Tenant provider credentials use secret_ref in Google Secret Manager.
++# Tenant payment display instructions (bank name/account and QRIS image URL) belong in PaymentProviders.options_json, not secrets.
+ BITESHIP_API_KEY=
+ BITESHIP_ORIGIN_POSTAL_CODE=
+ MIDTRANS_ENABLED=false
+@@ -40,7 +42,8 @@ NEXT_PUBLIC_MANUAL_QRIS_IMAGE_URL=
+ # Tenant runtime configuration cache (0 disables cache; maximum 300000)
+ TENANT_CONFIG_CACHE_TTL_MS=45000
+ 
+-# Secret references use full resource names, e.g. projects/my-project/secrets/tenant-universal-midtrans/versions/latest.
++# Secret references use full resource names, e.g. projects/my-project/secrets/universal-midtrans-server-key/versions/latest.
++# Use tenant-scoped secret names: <tenant_id>-midtrans-server-key and <tenant_id>-biteship-api-key.
+ # Grant the service account roles/secretmanager.secretAccessor on only the secrets it needs.
+ 
+ # Protects server-side operational reconciliation endpoints. Use a long random secret.
+diff --git a/src/app/api/checkout/order/route.ts b/src/app/api/checkout/order/route.ts
+index 7b160b9..9938f4d 100644
+--- a/src/app/api/checkout/order/route.ts
++++ b/src/app/api/checkout/order/route.ts
+@@ -7,6 +7,7 @@ import type { OrderCustomer, PaymentMethod } from "@/core/commerce/order-types";
+ import { getCartService } from "@/core/cart";
+ import { getOrderService } from "@/infrastructure/commerce";
+ import { getTenantShippingService } from "@/infrastructure/shipping";
++import { resolveMidtransRuntimeConfig, resolveTenantPaymentPresentation } from "@/infrastructure/tenant-config/provider-config";
+ 
+ type RequestBody = {
+   cart?: Cart;
+@@ -166,10 +167,24 @@ export async function POST(request: Request) {
+ 
+     const paymentMethod: PaymentMethod =
+       body.paymentMethod === "manual_bank_transfer" ||
+-      body.paymentMethod === "manual_qris"
++      body.paymentMethod === "manual_qris" ||
++      body.paymentMethod === "midtrans"
+         ? body.paymentMethod
+         : "midtrans";
+ 
++    if (paymentMethod === "midtrans") {
++      const midtrans = await resolveMidtransRuntimeConfig(storeConfig.tenantId);
++      if (!midtrans.enabled) {
++        return NextResponse.json({ error: "Midtrans tidak aktif untuk toko ini." }, { status: 409 });
++      }
++    } else {
++      const methods = await resolveTenantPaymentPresentation(storeConfig.tenantId);
++      const enabled = paymentMethod === "manual_bank_transfer" ? methods.manualBankEnabled : methods.manualQrisEnabled;
++      if (!enabled) {
++        return NextResponse.json({ error: "Metode pembayaran tidak aktif untuk toko ini." }, { status: 409 });
++      }
++    }
++
+     const order = await getOrderService().createPendingOrder({
+       tenantId: storeConfig.tenantId,
+       cart: trustedCart,
+diff --git a/src/app/checkout/page.tsx b/src/app/checkout/page.tsx
+index 8ccab8c..684452f 100644
+--- a/src/app/checkout/page.tsx
++++ b/src/app/checkout/page.tsx
+@@ -1,7 +1,7 @@
+ import { CheckoutPage } from "@/components/checkout";
+ import { paymentConfig } from "@/config/payment";
+ import { storeConfig } from "@/config/store";
+-import { resolveMidtransRuntimeConfig } from "@/infrastructure/tenant-config/provider-config";
++import { resolveMidtransRuntimeConfig, resolveTenantPaymentPresentation } from "@/infrastructure/tenant-config/provider-config";
+ 
+ export const dynamic = "force-dynamic";
+ 
+@@ -33,14 +33,47 @@ export default async function CheckoutRoute() {
+     };
+   }
+ 
++  let manualBank = paymentConfig.manualBankTransfer;
++  let manualQris = paymentConfig.manualQris;
++  let manualBankEnabled = true;
++  let manualQrisEnabled = true;
++
++  try {
++    const presentation = await resolveTenantPaymentPresentation(storeConfig.tenantId);
++    manualBank = presentation.manualBank;
++    manualQris = presentation.manualQris;
++    manualBankEnabled = presentation.manualBankEnabled;
++    manualQrisEnabled = presentation.manualQrisEnabled;
++  } catch {
++    // Never fall back to another tenant's instructions when tenant config is invalid.
++    manualBankEnabled = false;
++    manualQrisEnabled = false;
++    manualBank = {
++      method: "manual_bank_transfer",
++      title: "Transfer Bank",
++      description: "Instruksi pembayaran belum dapat dimuat. Hubungi admin toko sebelum melakukan transfer.",
++      bankName: "",
++      accountName: "",
++      accountNumber: "",
++    };
++    manualQris = {
++      method: "manual_qris",
++      title: "QRIS",
++      description: "Instruksi QRIS belum dapat dimuat. Hubungi admin toko sebelum melakukan pembayaran.",
++      qrisImageUrl: "",
++    };
++  }
++
+   return (
+     <CheckoutPage
+       payment={{
+         midtransEnabled: midtrans.enabled,
+         midtransClientKey: midtrans.clientKey,
+         midtransEnvironment: midtrans.environment,
+-        manualBank: paymentConfig.manualBankTransfer,
+-        manualQris: paymentConfig.manualQris,
++        manualBank,
++        manualQris,
++        manualBankEnabled,
++        manualQrisEnabled,
+       }}
+     />
+   );
+diff --git a/src/components/checkout/CheckoutPage.tsx b/src/components/checkout/CheckoutPage.tsx
+index 9352805..c9eb541 100644
+--- a/src/components/checkout/CheckoutPage.tsx
++++ b/src/components/checkout/CheckoutPage.tsx
+@@ -32,6 +32,8 @@ type CheckoutPageProps = {
+     midtransEnvironment: "sandbox" | "production";
+     manualBank: PaymentInstruction;
+     manualQris: PaymentInstruction;
++    manualBankEnabled: boolean;
++    manualQrisEnabled: boolean;
+   };
+ };
+ 
+@@ -78,7 +80,16 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
+   const [recipientNote, setRecipientNote] = useState("");
+   const [coordinates, setCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
+   const [locationLoading, setLocationLoading] = useState(false);
+-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(payment.midtransEnabled ? "midtrans" : "manual_bank_transfer");
++  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
++    payment.midtransEnabled
++      ? "midtrans"
++      : payment.manualBankEnabled
++        ? "manual_bank_transfer"
++        : payment.manualQrisEnabled
++          ? "manual_qris"
++          : "manual_bank_transfer",
++  );
++  const hasAvailablePaymentMethod = payment.midtransEnabled || payment.manualBankEnabled || payment.manualQrisEnabled;
+   const [shippingRates, setShippingRates] = useState<readonly ShippingRate[]>([]);
+   const [shippingRateId, setShippingRateId] = useState("");
+   const [shippingLoading, setShippingLoading] = useState(false);
+@@ -258,6 +269,18 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
+       setError("Keranjang masih kosong.");
+       return;
+     }
++    if (!hasAvailablePaymentMethod) {
++      setError("Belum ada metode pembayaran aktif. Hubungi admin toko sebelum melanjutkan.");
++      return;
++    }
++    if (
++      (paymentMethod === "midtrans" && !payment.midtransEnabled) ||
++      (paymentMethod === "manual_bank_transfer" && !payment.manualBankEnabled) ||
++      (paymentMethod === "manual_qris" && !payment.manualQrisEnabled)
++    ) {
++      setError("Metode pembayaran yang dipilih tidak aktif. Silakan muat ulang checkout.");
++      return;
++    }
+     if (!reconciled) {
+       const ready = await reconcileBeforeCheckout();
+       if (!ready) return;
+@@ -584,14 +607,15 @@ export function CheckoutPage({ payment }: CheckoutPageProps) {
+             <p className="mt-1 text-sm leading-6 text-[rgb(var(--color-text-muted))]">Pilihan ini akan disimpan bersama order agar instruksi pembayaran sesuai dengan metode yang dipilih.</p>
+             <div className="mt-4 grid gap-3 sm:grid-cols-3">
+               {payment.midtransEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "midtrans" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "midtrans"} onChange={() => setPaymentMethod("midtrans")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Midtrans</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Virtual account, e-wallet, kartu, dan metode tersedia di Snap</span></span></label> : null}
+-              <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_bank_transfer" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_bank_transfer"} onChange={() => setPaymentMethod("manual_bank_transfer")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Transfer Bank</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Transfer lalu konfirmasi manual</span></span></label>
+-              <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_qris" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_qris"} onChange={() => setPaymentMethod("manual_qris")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">QRIS</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Scan QRIS toko lalu konfirmasi</span></span></label>
++              {payment.manualBankEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_bank_transfer" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_bank_transfer"} onChange={() => setPaymentMethod("manual_bank_transfer")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">Transfer Bank</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Transfer lalu konfirmasi manual</span></span></label> : null}
++              {payment.manualQrisEnabled ? <label className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border p-4 transition ${paymentMethod === "manual_qris" ? "border-[rgb(var(--color-primary))] bg-[rgb(var(--color-primary-soft))]" : "border-[rgb(var(--color-border))] hover:border-[rgb(var(--color-primary))]/40"}`}><input type="radio" name="checkoutPaymentMethod" checked={paymentMethod === "manual_qris"} onChange={() => setPaymentMethod("manual_qris")} className="mt-1 accent-[rgb(var(--color-primary))]" /><span><span className="block text-sm font-semibold text-[rgb(var(--color-text))]">QRIS</span><span className="mt-1 block text-xs leading-5 text-[rgb(var(--color-text-muted))]">Scan QRIS toko lalu konfirmasi</span></span></label> : null}
++              {!hasAvailablePaymentMethod ? <p className="rounded-[var(--radius-md)] border border-[rgb(var(--color-border))] p-4 text-sm text-[rgb(var(--color-text-muted))]">Belum ada metode pembayaran aktif. Silakan hubungi admin toko.</p> : null}
+             </div>
+           </div>
+ 
+           {error ? <div role="alert" className="mt-6 rounded-[var(--radius-md)] border border-[rgb(var(--color-sale))]/20 bg-[rgb(var(--color-sale))]/5 p-4 text-sm leading-5 text-[rgb(var(--color-sale))]">{error}</div> : null}
+ 
+-          <button type="submit" disabled={submitting || shippingLoading || reconciling || !reconciled} aria-busy={submitting} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white shadow-[var(--shadow-sm)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto">
++          <button type="submit" disabled={submitting || shippingLoading || reconciling || !reconciled || !hasAvailablePaymentMethod} aria-busy={submitting} className="mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white shadow-[var(--shadow-sm)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto">
+             {submitting ? <><Loader2 size={17} className="animate-spin" />Menyimpan pesanan…</> : reconciling ? <><Loader2 size={17} className="animate-spin" />Memeriksa keranjang…</> : shippingLoading ? <><Loader2 size={17} className="animate-spin" />Menghitung ongkir…</> : reconciled ? "Buat pesanan" : "Periksa kembali keranjang"}
+           </button>
+           {submitting ? <p role="status" aria-live="polite" className="mt-3 flex items-center gap-2 text-sm text-[rgb(var(--color-text-muted))]"><Loader2 size={15} className="animate-spin" />Sedang memvalidasi harga, tarif pengiriman, dan menyimpan order. Jangan tutup halaman ini.</p> : null}
+diff --git a/src/components/payment/PaymentPanel.tsx b/src/components/payment/PaymentPanel.tsx
+index ae05985..ebfcf0c 100644
+--- a/src/components/payment/PaymentPanel.tsx
++++ b/src/components/payment/PaymentPanel.tsx
+@@ -113,7 +113,7 @@ export function PaymentPanel({ order, midtransEnabled, midtransClientKey, midtra
+ 
+       {method === "manual_bank_transfer" ? <div className="mt-5 rounded-[var(--radius-md)] border border-[rgb(var(--color-border))] bg-[rgb(var(--color-background))] p-5"><p className="text-sm font-semibold text-[rgb(var(--color-text))]">{manualBank.title}</p><div className="mt-4 grid gap-3 sm:grid-cols-3"><div><p className="text-xs text-[rgb(var(--color-text-muted))]">Bank</p><p className="mt-1 text-sm font-semibold text-[rgb(var(--color-text))]">{manualBank.bankName || "Belum dikonfigurasi"}</p></div><div><p className="text-xs text-[rgb(var(--color-text-muted))]">Nomor rekening</p><div className="mt-1 flex items-center gap-2"><p className="text-sm font-semibold text-[rgb(var(--color-text))]">{manualBank.accountNumber || "Belum dikonfigurasi"}</p>{manualBank.accountNumber ? <button type="button" aria-label="Salin nomor rekening" onClick={() => void navigator.clipboard.writeText(manualBank.accountNumber ?? "")}><Copy size={15} /></button> : null}</div></div><div><p className="text-xs text-[rgb(var(--color-text-muted))]">Atas nama</p><p className="mt-1 text-sm font-semibold text-[rgb(var(--color-text))]">{manualBank.accountName || "Belum dikonfigurasi"}</p></div></div><button type="button" disabled={loading || confirmed} onClick={() => void confirmManual()} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white disabled:opacity-50">{confirmed ? <CheckCircle2 size={16} /> : null}{confirmed ? "Konfirmasi terkirim" : loading ? "Mengirim…" : "Saya sudah transfer"}</button></div> : null}
+ 
+-      {method === "manual_qris" ? <div className="mt-5 rounded-[var(--radius-md)] border border-[rgb(var(--color-border))] bg-[rgb(var(--color-background))] p-5"><p className="text-sm font-semibold text-[rgb(var(--color-text))]">{manualQris.title}</p>{manualQris.qrisImageUrl ? <img src={manualQris.qrisImageUrl} alt="QRIS Universal Mart" className="mx-auto mt-5 aspect-square w-full max-w-[280px] rounded-xl border border-[rgb(var(--color-border))] bg-white object-contain p-3" /> : <div className="mt-5 rounded-xl border border-dashed border-[rgb(var(--color-border))] p-8 text-center text-sm text-[rgb(var(--color-text-muted))]">QRIS belum dikonfigurasi. Tambahkan URL gambar QRIS pada environment.</div>}<button type="button" disabled={loading || confirmed || !manualQris.qrisImageUrl} onClick={() => void confirmManual()} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white disabled:opacity-50">{confirmed ? <CheckCircle2 size={16} /> : null}{confirmed ? "Konfirmasi terkirim" : loading ? "Mengirim…" : "Saya sudah membayar"}</button></div> : null}
++      {method === "manual_qris" ? <div className="mt-5 rounded-[var(--radius-md)] border border-[rgb(var(--color-border))] bg-[rgb(var(--color-background))] p-5"><p className="text-sm font-semibold text-[rgb(var(--color-text))]">{manualQris.title}</p>{manualQris.qrisImageUrl ? <img src={manualQris.qrisImageUrl} alt={manualQris.title || "QRIS toko"} className="mx-auto mt-5 aspect-square w-full max-w-[280px] rounded-xl border border-[rgb(var(--color-border))] bg-white object-contain p-3" /> : <div className="mt-5 rounded-xl border border-dashed border-[rgb(var(--color-border))] p-8 text-center text-sm text-[rgb(var(--color-text-muted))]">QRIS belum dikonfigurasi. Tambahkan URL gambar QRIS pada environment.</div>}<button type="button" disabled={loading || confirmed || !manualQris.qrisImageUrl} onClick={() => void confirmManual()} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] bg-[rgb(var(--color-primary))] px-5 text-sm font-semibold text-white disabled:opacity-50">{confirmed ? <CheckCircle2 size={16} /> : null}{confirmed ? "Konfirmasi terkirim" : loading ? "Mengirim…" : "Saya sudah membayar"}</button></div> : null}
+ 
+       {message ? <div role="status" className="mt-5 rounded-[var(--radius-md)] bg-[rgb(var(--color-surface-secondary))] p-4 text-sm leading-6 text-[rgb(var(--color-text-muted))]">{message}</div> : null}
+     </section>
+diff --git a/src/infrastructure/tenant-config/google-sheets-tenant-config-repository.ts b/src/infrastructure/tenant-config/google-sheets-tenant-config-repository.ts
+index e59f8ad..97538f4 100644
+--- a/src/infrastructure/tenant-config/google-sheets-tenant-config-repository.ts
++++ b/src/infrastructure/tenant-config/google-sheets-tenant-config-repository.ts
+@@ -83,6 +83,9 @@ function parseJsonOptions(value: string | undefined): Readonly<Record<string, st
+   }
+   const result: Record<string, string> = {};
+   for (const [key, item] of Object.entries(parsed)) {
++    if (/(^|_)(secret|token|password|api_key|private_key|server_key|access_key)(_|$)/i.test(key)) {
++      throw new Error(`options_json tidak boleh menyimpan kredensial pada key '${key}'. Gunakan Google Secret Manager dan secret_ref.`);
++    }
+     if (typeof item !== "string" && typeof item !== "number" && typeof item !== "boolean") {
+       throw new Error(`Nilai options_json '${key}' harus berupa string, number, atau boolean.`);
+     }
+@@ -124,26 +127,40 @@ function mapStore(table: Table, fallback: TenantStoreSettings): TenantStoreSetti
+ 
+ function mapPaymentProviders(table: Table): TenantPaymentProviderConfig[] {
+   const allowed = new Set<ProviderId>(["midtrans", "manual_bank_transfer", "manual_qris"]);
++  const seen = new Set<ProviderId>();
+   return table.rows.map((row) => {
+     const record = asRecord(table, row);
+     const providerId = required(record, "provider_id", "PaymentProviders") as ProviderId;
+     if (!allowed.has(providerId)) throw new Error(`Payment provider '${providerId}' belum didukung platform.`);
++    if (seen.has(providerId)) throw new Error(`PaymentProviders memiliki provider_id duplikat '${providerId}'.`);
++    seen.add(providerId);
++    const secretRef = optional(record, "secret_ref");
++    const publicClientKey = optional(record, "public_client_key");
++    if (providerId !== "midtrans" && secretRef) {
++      throw new Error(`Provider '${providerId}' tidak memerlukan secret_ref pada konfigurasi pembayaran manual.`);
++    }
++    if (providerId !== "midtrans" && publicClientKey) {
++      throw new Error(`Provider '${providerId}' tidak boleh memiliki public_client_key.`);
++    }
+     return {
+       providerId,
+       enabled: booleanValue(record.enabled),
+       environment: parseEnvironment(record.environment),
+-      secretRef: optional(record, "secret_ref"),
+-      publicClientKey: optional(record, "public_client_key"),
++      secretRef,
++      publicClientKey,
+       options: parseJsonOptions(record.options_json),
+     };
+   });
+ }
+ 
+ function mapShippingProviders(table: Table): TenantShippingProviderConfig[] {
++  const seen = new Set<string>();
+   return table.rows.map((row) => {
+     const record = asRecord(table, row);
+     const providerId = required(record, "provider_id", "ShippingProviders");
+     if (providerId !== "biteship") throw new Error(`Shipping provider '${providerId}' belum didukung platform.`);
++    if (seen.has(providerId)) throw new Error(`ShippingProviders memiliki provider_id duplikat '${providerId}'.`);
++    seen.add(providerId);
+     const rawPostalCode = optional(record, "origin_postal_code");
+     const originPostalCode = rawPostalCode ? Number(rawPostalCode) : null;
+     if (originPostalCode !== null && (!Number.isInteger(originPostalCode) || originPostalCode <= 0)) {
+diff --git a/src/infrastructure/tenant-config/provider-config.ts b/src/infrastructure/tenant-config/provider-config.ts
+index 04c2130..73b4617 100644
+--- a/src/infrastructure/tenant-config/provider-config.ts
++++ b/src/infrastructure/tenant-config/provider-config.ts
+@@ -1,6 +1,8 @@
+ import "server-only";
+ 
++import type { PaymentInstruction } from "@/core/payments";
+ import { paymentConfig } from "@/config/payment";
++import { getCommerceConfig } from "@/infrastructure/config/commerce-config";
+ import { resolveTenantConfig } from "./resolver";
+ import { resolveProviderSecret } from "@/infrastructure/secrets";
+ 
+@@ -19,6 +21,14 @@ export type BiteshipRuntimeConfig = {
+   source: "tenant" | "legacy_env";
+ };
+ 
++export type TenantPaymentPresentation = {
++  manualBank: PaymentInstruction;
++  manualQris: PaymentInstruction;
++  manualBankEnabled: boolean;
++  manualQrisEnabled: boolean;
++  source: "tenant" | "legacy_env";
++};
++
+ function legacyPostalCode(): number {
+   const value = Number(process.env.BITESHIP_ORIGIN_POSTAL_CODE ?? "0");
+   if (!Number.isSafeInteger(value) || value <= 0) {
+@@ -27,11 +37,69 @@ function legacyPostalCode(): number {
+   return value;
+ }
+ 
+-/** Tenant row wins when present. Legacy environment fallback keeps existing single-store deployments working during migration. */
++function assertTenantSecretRef(secretRef: string | null, tenantId: string, provider: "midtrans" | "biteship"): void {
++  if (!secretRef) throw new Error(`Provider ${provider} aktif belum memiliki secret_ref.`);
++  const match = /^projects\/([^/]+)\/secrets\/([^/]+)\/versions\/(?:latest|[1-9][0-9]*)$/.exec(secretRef.trim());
++  if (!match) throw new Error("secret_ref harus berupa resource Google Secret Manager yang valid.");
++  const expectedProject = process.env.GOOGLE_SECRET_MANAGER_PROJECT_ID?.trim();
++  if (!expectedProject) throw new Error("GOOGLE_SECRET_MANAGER_PROJECT_ID wajib diisi saat menggunakan secret_ref tenant.");
++  if (match[1] !== expectedProject) throw new Error("secret_ref harus berada pada project Google Secret Manager yang dikonfigurasi.");
++
++  const secretName = match[2];
++  const allowedNames = provider === "midtrans"
++    ? [`${tenantId}-midtrans-server-key`, `tenant-${tenantId}-midtrans-server-key`, `${tenantId}-midtrans`, `tenant-${tenantId}-midtrans`]
++    : [`${tenantId}-biteship-api-key`, `tenant-${tenantId}-biteship-api-key`, `${tenantId}-biteship`, `tenant-${tenantId}-biteship`];
++  if (!allowedNames.includes(secretName)) {
++    throw new Error(`secret_ref provider ${provider} harus merujuk secret khusus tenant '${tenantId}'.`);
++  }
++}
++
++async function getTenantSecret(secretRef: string | null, tenantId: string, provider: "midtrans" | "biteship"): Promise<string> {
++  assertTenantSecretRef(secretRef, tenantId, provider);
++  return resolveProviderSecret(secretRef);
++}
++
++function instructionFromOptions(
++  method: "manual_bank_transfer" | "manual_qris",
++  options: Readonly<Record<string, string>> | undefined,
++): PaymentInstruction {
++  const values = options ?? {};
++  if (method === "manual_bank_transfer") {
++    return {
++      method,
++      title: values.title?.trim() || "Transfer Bank",
++      description: values.description?.trim() || "Transfer sesuai nominal order, lalu konfirmasi pembayaran kepada admin.",
++      bankName: values.bank_name?.trim() || "",
++      accountName: values.account_name?.trim() || "",
++      accountNumber: values.account_number?.trim() || "",
++    };
++  }
++
++  const qrisImageUrl = values.qris_image_url?.trim() || "";
++  if (qrisImageUrl) {
++    let parsedUrl: URL;
++    try { parsedUrl = new URL(qrisImageUrl); } catch { throw new Error("PaymentProviders.options_json.qris_image_url harus berupa URL absolut."); }
++    if (parsedUrl.protocol !== "https:" && parsedUrl.hostname !== "localhost") {
++      throw new Error("PaymentProviders.options_json.qris_image_url harus menggunakan HTTPS.");
++    }
++  }
++  return {
++    method,
++    title: values.title?.trim() || "QRIS",
++    description: values.description?.trim() || "Scan QRIS menggunakan aplikasi pembayaran pilihan Anda, lalu konfirmasi pembayaran.",
++    qrisImageUrl,
++  };
++}
++
++/** Legacy environment fallback is intentionally limited to single_store migration. */
+ export async function resolveMidtransRuntimeConfig(tenantId: string): Promise<MidtransRuntimeConfig> {
++  const commerce = getCommerceConfig();
+   const config = await resolveTenantConfig(tenantId);
+   const provider = config.paymentProviders.find((item) => item.providerId === "midtrans");
+   if (!provider) {
++    if (commerce.mode === "marketplace") {
++      return { enabled: false, environment: "sandbox", serverKey: "", clientKey: "", source: "tenant" };
++    }
+     return {
+       enabled: paymentConfig.midtrans.enabled,
+       environment: paymentConfig.midtrans.environment,
+@@ -46,20 +114,25 @@ export async function resolveMidtransRuntimeConfig(tenantId: string): Promise<Mi
+   return {
+     enabled: true,
+     environment: provider.environment,
+-    serverKey: await resolveProviderSecret(provider.secretRef),
++    serverKey: await getTenantSecret(provider.secretRef, config.tenantId, "midtrans"),
+     clientKey: provider.publicClientKey,
+     source: "tenant",
+   };
+ }
+ 
+ export async function resolveBiteshipRuntimeConfig(tenantId: string): Promise<BiteshipRuntimeConfig> {
++  const commerce = getCommerceConfig();
+   const config = await resolveTenantConfig(tenantId);
+   const provider = config.shippingProviders.find((item) => item.providerId === "biteship");
+   if (!provider) {
++    if (commerce.mode === "marketplace") {
++      return { enabled: false, apiKey: "", originPostalCode: 0, source: "tenant" };
++    }
++    const apiKey = process.env.BITESHIP_API_KEY?.trim() ?? "";
+     return {
+-      enabled: Boolean(process.env.BITESHIP_API_KEY?.trim()),
+-      apiKey: process.env.BITESHIP_API_KEY?.trim() ?? "",
+-      originPostalCode: legacyPostalCode(),
++      enabled: Boolean(apiKey),
++      apiKey,
++      originPostalCode: apiKey ? legacyPostalCode() : 0,
+       source: "legacy_env",
+     };
+   }
+@@ -67,8 +140,47 @@ export async function resolveBiteshipRuntimeConfig(tenantId: string): Promise<Bi
+   if (!provider.originPostalCode) throw new Error("ShippingProviders.origin_postal_code wajib diisi untuk Biteship aktif.");
+   return {
+     enabled: true,
+-    apiKey: await resolveProviderSecret(provider.secretRef),
++    apiKey: await getTenantSecret(provider.secretRef, config.tenantId, "biteship"),
+     originPostalCode: provider.originPostalCode,
+     source: "tenant",
+   };
+ }
++
++/** Public/manual payment instructions may live in tenant Sheets; provider credentials never do. */
++export async function resolveTenantPaymentPresentation(tenantId: string): Promise<TenantPaymentPresentation> {
++  const commerce = getCommerceConfig();
++  const config = await resolveTenantConfig(tenantId);
++  const bankProvider = config.paymentProviders.find((item) => item.providerId === "manual_bank_transfer");
++  const qrisProvider = config.paymentProviders.find((item) => item.providerId === "manual_qris");
++  const hasTenantPresentation = Boolean(bankProvider || qrisProvider);
++
++  if (!hasTenantPresentation && commerce.mode === "single_store") {
++    return {
++      manualBank: paymentConfig.manualBankTransfer,
++      manualQris: paymentConfig.manualQris,
++      manualBankEnabled: true,
++      manualQrisEnabled: true,
++      source: "legacy_env",
++    };
++  }
++
++  const manualBankEnabled = bankProvider?.enabled ?? false;
++  const manualQrisEnabled = qrisProvider?.enabled ?? false;
++  const bankOptions = bankProvider?.options;
++  const qrisOptions = qrisProvider?.options;
++
++  if (manualBankEnabled && (!bankOptions?.bank_name?.trim() || !bankOptions.account_name?.trim() || !bankOptions.account_number?.trim())) {
++    throw new Error("Provider transfer bank aktif wajib memiliki bank_name, account_name, dan account_number pada options_json.");
++  }
++  if (manualQrisEnabled && !qrisOptions?.qris_image_url?.trim()) {
++    throw new Error("Provider QRIS aktif wajib memiliki qris_image_url pada options_json.");
++  }
++
++  return {
++    manualBank: instructionFromOptions("manual_bank_transfer", manualBankEnabled ? bankOptions : undefined),
++    manualQris: instructionFromOptions("manual_qris", manualQrisEnabled ? qrisOptions : undefined),
++    manualBankEnabled,
++    manualQrisEnabled,
++    source: "tenant",
++  };
++}

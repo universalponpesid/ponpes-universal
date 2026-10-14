@@ -7,6 +7,7 @@ import type { OrderCustomer, PaymentMethod } from "@/core/commerce/order-types";
 import { getCartService } from "@/core/cart";
 import { getOrderService } from "@/infrastructure/commerce";
 import { getTenantShippingService } from "@/infrastructure/shipping";
+import { resolveMidtransRuntimeConfig, resolveTenantPaymentPresentation } from "@/infrastructure/tenant-config/provider-config";
 
 type RequestBody = {
   cart?: Cart;
@@ -166,9 +167,23 @@ export async function POST(request: Request) {
 
     const paymentMethod: PaymentMethod =
       body.paymentMethod === "manual_bank_transfer" ||
-      body.paymentMethod === "manual_qris"
+      body.paymentMethod === "manual_qris" ||
+      body.paymentMethod === "midtrans"
         ? body.paymentMethod
         : "midtrans";
+
+    if (paymentMethod === "midtrans") {
+      const midtrans = await resolveMidtransRuntimeConfig(storeConfig.tenantId);
+      if (!midtrans.enabled) {
+        return NextResponse.json({ error: "Midtrans tidak aktif untuk toko ini." }, { status: 409 });
+      }
+    } else {
+      const methods = await resolveTenantPaymentPresentation(storeConfig.tenantId);
+      const enabled = paymentMethod === "manual_bank_transfer" ? methods.manualBankEnabled : methods.manualQrisEnabled;
+      if (!enabled) {
+        return NextResponse.json({ error: "Metode pembayaran tidak aktif untuk toko ini." }, { status: 409 });
+      }
+    }
 
     const order = await getOrderService().createPendingOrder({
       tenantId: storeConfig.tenantId,

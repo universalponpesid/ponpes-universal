@@ -1,0 +1,84 @@
+--- a/src/components/cart/CartProvider.tsx
++++ b/src/components/cart/CartProvider.tsx
+@@ -22,6 +22,7 @@
+   syncItemSnapshot: (itemId: string, quantity: number, unitPrice: number) => void;
+   applyReconciliation: (reconciliation: CartReconciliation) => void;
+   removeItem: (itemId: string) => void;
++  removePurchasedItems: (items: readonly { productId: string; variantId?: string; quantity: number }[]) => void;
+   clearCart: () => void;
+ };
+ 
+@@ -129,6 +130,41 @@
+     }));
+   }, []);
+ 
++  const removePurchasedItems = useCallback((purchasedItems: readonly { productId: string; variantId?: string; quantity: number }[]) => {
++    // Subtract the quantities recorded on the successfully created order rather
++    // than clearing the whole cart. This preserves products added while the
++    // checkout request was in flight.
++    setCart((current) => {
++      const remainingByProductVariant = new Map<string, number>();
++
++      for (const item of purchasedItems) {
++        if (!Number.isFinite(item.quantity) || item.quantity <= 0) continue;
++        const key = JSON.stringify([item.productId, item.variantId ?? null]);
++        remainingByProductVariant.set(
++          key,
++          (remainingByProductVariant.get(key) ?? 0) + Math.floor(item.quantity),
++        );
++      }
++
++      let changed = false;
++      const nextItems = current.items.flatMap((item) => {
++        const key = JSON.stringify([item.productId, item.variantId ?? null]);
++        const remainingToRemove = remainingByProductVariant.get(key) ?? 0;
++        if (remainingToRemove <= 0) return [item];
++
++        const removedQuantity = Math.min(item.quantity, remainingToRemove);
++        remainingByProductVariant.set(key, remainingToRemove - removedQuantity);
++        changed = changed || removedQuantity > 0;
++        const nextQuantity = item.quantity - removedQuantity;
++
++        return nextQuantity > 0 ? [{ ...item, quantity: nextQuantity }] : [];
++      });
++
++      if (!changed) return current;
++      return { ...current, items: nextItems, updatedAt: new Date().toISOString() };
++    });
++  }, []);
++
+   const clearCart = useCallback(() => {
+     setCart((current) => ({ ...current, items: [], updatedAt: new Date().toISOString() }));
+   }, []);
+@@ -142,8 +178,9 @@
+     syncItemSnapshot,
+     applyReconciliation,
+     removeItem,
++    removePurchasedItems,
+     clearCart,
+-  }), [addItem, applyReconciliation, cart, clearCart, removeItem, syncItemSnapshot, updateQuantity]);
++  }), [addItem, applyReconciliation, cart, clearCart, removeItem, removePurchasedItems, syncItemSnapshot, updateQuantity]);
+ 
+   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
+ }
+--- a/src/components/checkout/CheckoutPage.tsx
++++ b/src/components/checkout/CheckoutPage.tsx
+@@ -57,7 +57,7 @@
+   "min-h-12 w-full rounded-[var(--radius-sm)] border border-[rgb(var(--color-border))] bg-[rgb(var(--color-background))] px-4 text-sm text-[rgb(var(--color-text))] outline-none transition placeholder:text-[rgb(var(--color-text-subtle))] focus:border-[rgb(var(--color-primary))] focus:ring-2 focus:ring-[rgb(var(--color-primary))]/10";
+ 
+ export function CheckoutPage({ payment }: CheckoutPageProps) {
+-  const { cart, itemCount, subtotalSnapshot, applyReconciliation } = useCart();
++  const { cart, itemCount, subtotalSnapshot, applyReconciliation, removePurchasedItems } = useCart();
+ 
+   const [reconciling, setReconciling] = useState(true);
+   const [reconciled, setReconciled] = useState(false);
+@@ -310,6 +310,9 @@
+       if (!response.ok || !payload.order) {
+         throw new Error(payload.error ?? "Order belum dapat dibuat.");
+       }
++      // Clear only quantities confirmed on the order, and only after the API
++      // confirms success. Items added while checkout was in flight remain in cart.
++      removePurchasedItems(payload.order.items);
+       setOrder(payload.order);
+     } catch (checkoutError) {
+       setError(
